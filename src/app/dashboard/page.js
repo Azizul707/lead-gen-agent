@@ -58,11 +58,19 @@ export default function DashboardPage() {
     }
 
     try {
-      // POST to search-leads endpoint (immediately returns a requestId)
+      // Get current logged-in user session JWT token securely
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+      const token = session.access_token;
+
+      // POST to search-leads endpoint sending JWT token in Authorization header
       const response = await fetch('/api/search-leads', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           webhookUrl: savedWebhookUrl,
