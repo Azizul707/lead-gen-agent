@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '../../../lib/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(request) {
   try {
@@ -10,11 +13,18 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing required payload parameters." }, { status: 400 });
     }
 
+    if (!supabaseServiceKey) {
+      console.error("SUPABASE_SERVICE_ROLE_KEY is missing in your environment variables.");
+      return NextResponse.json({ error: "Server misconfiguration. Admin key is missing." }, { status: 500 });
+    }
+
+    // Initialize admin client with the service role key to securely bypass RLS for background n8n tasks
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
     console.log(`Received ${leads.length} leads from n8n for search request: ${requestId}`);
 
     if (leads.length === 0) {
-      // If no leads were found, update the search status as completed with 0 results
-      await supabase
+      await supabaseAdmin
         .from('lead_searches')
         .update({ status: 'completed', results_count: 0 })
         .eq('request_id', requestId);
@@ -28,16 +38,19 @@ export async function POST(request) {
       user_id: userId,
       name: lead.name || 'N/A',
       phone: lead.phone || 'N/A',
-      formatted_phone: lead.formatted_phone || lead.phone || 'N/A', // WhatsApp standard E.164 formatted number
+      formatted_phone: lead.formatted_phone || lead.phone || 'N/A',
       facebook: lead.facebook || null,
       website: lead.website || 'N/A',
       address: lead.address || 'N/A',
       rating: lead.rating ? parseFloat(lead.rating) : null,
+      reviews_count: lead.reviews_count || null,
+      is_claimed: lead.is_claimed !== undefined ? lead.is_claimed : null,
+      category: lead.category || 'N/A',
       source: source || 'free'
     }));
 
-    // 2. Insert mapped leads into 'leads' table
-    const { error: insertError } = await supabase
+    // 2. Insert mapped leads using admin bypass client
+    const { error: insertError } = await supabaseAdmin
       .from('leads')
       .insert(leadsToInsert);
 
@@ -45,8 +58,8 @@ export async function POST(request) {
       throw insertError;
     }
 
-    // 3. Update the search campaign status as 'completed' and save results count
-    const { error: updateSearchError } = await supabase
+    // 3. Update the search campaign status as 'completed'
+    const { error: updateSearchError } = await supabaseAdmin
       .from('lead_searches')
       .update({ 
         status: 'completed', 
