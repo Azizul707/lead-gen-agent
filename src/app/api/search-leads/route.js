@@ -28,7 +28,7 @@ export async function POST(request) {
     });
 
     // Securely verify the token directly with Supabase engine
-    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser(token);
     if (authError || !user) {
       return NextResponse.json({ error: "Unauthorized access. Invalid session or expired token." }, { status: 401 });
     }
@@ -62,7 +62,6 @@ export async function POST(request) {
     // 3. Generate a unique requestId and set campaign status as 'processing'
     const requestId = crypto.randomUUID();
     
-    // This insert will now successfully pass RLS checks because it carries the user's JWT
     const { error: insertSearchError } = await userSupabase
       .from('lead_searches')
       .insert({
@@ -80,29 +79,37 @@ export async function POST(request) {
       throw insertSearchError;
     }
 
-    // 4. Trigger n8n Webhook asynchronously
+    // 4. Trigger n8n Webhook (Awaiting the fast immediate-respond trigger to prevent serverless process cutoff)
     const appUrl = request.headers.get('origin') || `${request.headers.get('x-forwarded-proto')}://${request.headers.get('host')}`;
 
-    console.log(`Triggering n8n asynchronously for search request: ${requestId}`);
+    console.log(`Triggering n8n for search request: ${requestId} via URL: ${webhookUrl}`);
     
-    fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        searchQuery: keyword,
-        location,
-        industry: title || 'N/A',
-        source,
-        limit: parseInt(limit, 10),
-        requestId,
-        userId: user.id,
-        appSaveUrl: `${appUrl}/api/save-leads`
-      }),
-    }).catch(err => {
-      console.error("Failed to trigger n8n background execution:", err);
-    });
+    try {
+      const n8nResponse = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          searchQuery: keyword,
+          location,
+          industry: title || 'N/A',
+          source,
+          limit: parseInt(limit, 10),
+          requestId,
+          userId: user.id,
+          appSaveUrl: `${appUrl}/api/save-leads`
+        }),
+      });
+
+      if (!n8nResponse.ok) {
+        console.error(`n8n webhook returned non-200 status code: ${n8nResponse.status}`);
+      } else {
+        console.log("Successfully triggered n8n webhook and received queued confirmation response.");
+      }
+    } catch (n8nError) {
+      console.error("Failed to connect or fetch n8n webhook:", n8nError);
+    }
 
     return NextResponse.json({ 
       status: "processing", 
