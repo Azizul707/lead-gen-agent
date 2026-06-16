@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '../../../lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export async function POST(request) {
   try {
@@ -15,8 +18,17 @@ export async function POST(request) {
       return NextResponse.json({ error: "Unauthorized access. No session token provided." }, { status: 401 });
     }
 
+    // Initialize a user-scoped Supabase client that carries the user's JWT token
+    const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    });
+
     // Securely verify the token directly with Supabase engine
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
     if (authError || !user) {
       return NextResponse.json({ error: "Unauthorized access. Invalid session or expired token." }, { status: 401 });
     }
@@ -29,7 +41,7 @@ export async function POST(request) {
     if (source === 'free') {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       
-      const { count, error: countError } = await supabase
+      const { count, error: countError } = await userSupabase
         .from('lead_searches')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', user.id)
@@ -50,7 +62,8 @@ export async function POST(request) {
     // 3. Generate a unique requestId and set campaign status as 'processing'
     const requestId = crypto.randomUUID();
     
-    const { error: insertSearchError } = await supabase
+    // This insert will now successfully pass RLS checks because it carries the user's JWT
+    const { error: insertSearchError } = await userSupabase
       .from('lead_searches')
       .insert({
         request_id: requestId,
